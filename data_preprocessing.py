@@ -1,5 +1,6 @@
 import pickle
 from config import Config
+import sys
 
 # span类
 class Span(object):
@@ -103,7 +104,12 @@ class Trace(object):
         return str(self.is_anomaly) + span_str
 
     def __lt__(self, other):
-        return self.timestamp < other.timestamp
+        if self.timestamp == -1:
+            return False
+        if other.timestamp == -1:
+            return True
+        else:
+            return self.timestamp < other.timestamp
 
     # 将trace文本转化为Trace类，用Span类进行填充
     def trace_doc2class(self, trace_dict: dict):
@@ -114,7 +120,10 @@ class Trace(object):
         spans_latency = trace_dict['latency']
         http_status = trace_dict['http_status']
         # 得到trace的时间戳
-        self.timestamp = spans_timestamp[0]
+        self.timestamp = sys.maxsize
+        for timestamp in spans_timestamp:
+            if timestamp != -1 and timestamp < self.timestamp:
+                self.timestamp = timestamp
         # 遍历trace中的调用关系
         for i in range(len(spans_call)):
             span = Span()
@@ -185,8 +194,8 @@ regions = {'cloud': ['10.244.13.', '10.244.0.', '10.244.5.', '10.244.6.'],
           'edge-1': ['10.244.8.', '10.244.12.'],
           'edge-2': ['10.244.9.', '10.244.11.']}
 
-# namespaces = {'bookinfo', 'hipster', 'hipster2', 'cloud-sock-shop', 'horsecoder-test'}
-namespaces = {'bookinfo'}
+namespaces = {'bookinfo', 'hipster'}
+# namespaces = {'bookinfo'}
 
 # 对span的调用关系进行处理，得到服务名，命名空间和网段名称
 def span_call_process(span_call: str):
@@ -265,8 +274,14 @@ def data_preprocessing(dir_path: str):
 
 # 排除trace数据影响
 def remove_region_latency(trace_class_data):
+    if Config.normal_latency_dict == {}:
+        Config.load_latency_dict()
     for trace in trace_class_data:
         for span in trace.spans:
+            if span.caller_region == span.callee_region:
+                continue
+            if span.caller_svc == 'OTHER_SVC' or span.callee_svc == 'OTHER_SVC':
+                continue
             call_region_pair = (span.caller_region, span.callee_region)
             if call_region_pair not in Config.cross_region_pair:
                 call_region_pair = (span.callee_region, span.caller_region)
@@ -283,20 +298,45 @@ def anomaly_detect(trace_class_data, abnormal_number):
         Config.load_latency_dict()
     normal_count = 0
     abnormal_count = 0
-    # 对每条trace数据，判断是否异常
-    for trace in trace_class_data:
-        result = trace.get_anomaly()
-        if result == True:
-            abnormal_count = abnormal_count + 1
-        else:
-            normal_count = normal_count + 1
+    is_anomaly = False
+    # 得到该样本trace的开始时间和结束时间
+    start_timestamp = trace_class_data[0].timestamp
+    end_timestamp = trace_class_data[-1].timestamp
+    detect_duration = 60 * 1000 * 1000  # 时间窗口为一分钟
+    forward_duration = 2 * 60 * 1000 * 1000
+    backward_duration = 5 * 60 * 1000 * 1000
+    # 从开始时间开始，加载一个时间窗口的trace
+    while True:
+        count = 0
+        if end_timestamp < start_timestamp:
+            break
+        window_traces = get_time_window_traces(trace_class_data, start_timestamp, 0, detect_duration)
+        # 对每条trace数据，判断是否异常
+        for trace in window_traces:
+            result = trace.get_anomaly()
+            if result is True:
+                abnormal_count += 1
+                count += 1
+            else:
+                normal_count = normal_count + 1
+        # 当异常trace数量达到一定时，判断为异常(统计时要注释掉)
+        if count >= abnormal_number:
+            # 获取一个更大的时间窗口
+            return get_time_window_traces(start_timestamp, forward_duration, backward_duration)
+        start_timestamp += detect_duration
+
     print("normal :", normal_count, "abnormal :", abnormal_count)
-    # 当异常trace数量达到一定时，判断为异常
-    # TODO：对每个时间窗口进行判定
-    if abnormal_count > abnormal_number:
-        return True
-    else:
-        return False
+    return None
+
+
+# 获取一个时间窗口内的trace
+def get_time_window_traces(trace_class_data, start_time, forward_duration, backward_duration):
+    time_window_traces = []
+    for trace in trace_class_data:
+        # trace在时间窗口之间
+        if trace.timestamp >= start_time - forward_duration and trace.timestamp <= start_time + backward_duration:
+            time_window_traces.append(trace)
+    return time_window_traces
 
 
 
@@ -305,7 +345,7 @@ if __name__ == '__main__':
     # trace_class_data = data_preprocessing(dir_path)
     # print(trace_class_data)
 
-    dir_path = 'bookinfo-details-net-3'
+    dir_path = 'dataset/bookinfo/details-v1_cloud_net/cloud_pod_details-v1_details-v1-66857885-k4ngb_net_1'
     trace_class_data = data_preprocessing(dir_path)
     anomaly_detect(trace_class_data, 1)
 

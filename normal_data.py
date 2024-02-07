@@ -1,3 +1,4 @@
+import os
 import pickle
 import numpy as np
 from config import Config
@@ -57,7 +58,7 @@ def call_process(span_call: str):
 def load_latency_data():
     # 加载正常情况下的pod延时和net延时，并将其排序合并
     normal_dir = 'normal'
-    paths = ['normal-240110-0230-1200', 'normal-240110-2130-240111-1130', 'normal-240113-2230-240114-1230', 'normal-240115-0000-1100', 'normal-240119-0400-1130']
+    paths = os.listdir(normal_dir)
     namespaces = Config.namespaces
 
     request_latency_dict = {}

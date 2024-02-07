@@ -1,4 +1,3 @@
-import pickle
 from config import Config
 import os
 import random
@@ -40,7 +39,7 @@ class TransformerEncoderClassification(nn.Module):
         x = x.permute(1, 0, 2)  # 恢复原始维度顺序，准备输入全连接
         x = x.flatten(1)  # 拉平，x维度是(批大小15，序列长度10，维度50)，指定维度1，拉平为(15,500)
         x = self.fc(x)  # 经过全连接
-        x = softmax(x, dim=1)  # softmax
+        # x = softmax(x, dim=1)  # softmax
         return x
 
 
@@ -136,7 +135,7 @@ def get_label_name(label_index: int):
 def train_model(train_sample_list):
     # 2. 对trace数据进行编码
     train_dataset = load_dataset(train_sample_list)
-    train_dataloader = DataLoader(train_dataset, batch_size=15, shuffle=True, num_workers=6)
+    train_dataloader = DataLoader(train_dataset, batch_size=256, shuffle=True, num_workers=6)
     # 查看一批数据的格式
     batch_train_data, batch_train_label = next(iter(train_dataloader))
     print("batch shape: ")
@@ -158,8 +157,8 @@ def train_model(train_sample_list):
     sequence_length = batch_train_data.shape[1]
     out_feature = len(Config.svc_list) * len(Config.region_list) * len(Config.chaos_list)
 
-    model = TransformerEncoderClassification(dimension, head_num, layer_num, sequence_length, out_feature)
-    criterion = nn.CrossEntropyLoss()
+    model = TransformerEncoderClassification(dimension, head_num, layer_num, sequence_length, out_feature).to(device)
+    criterion = nn.CrossEntropyLoss().to(device)
     optimizer = optim.SGD(model.parameters(), lr=0.001)  # 优化器
 
 
@@ -172,8 +171,8 @@ def train_model(train_sample_list):
     train_loss = 0
     for epoch in range(epoch_num):
         for i, (batch_train_data, batch_train_label) in enumerate(train_dataloader):
-            batch_train_data = batch_train_data
-            batch_train_label = batch_train_label
+            batch_train_data = batch_train_data.to(device)
+            batch_train_label = batch_train_label.to(device)
             outputs = model(batch_train_data)
             # 计算误差
             loss = criterion(outputs, batch_train_label.long())
@@ -193,7 +192,7 @@ def train_model(train_sample_list):
 
     end_time = time.time()
     print(end_time, 'end training')
-    print("training time: ", end_time - start_time)
+    print("training time: %.3fs" % (end_time - start_time))
     print('---------------------------------------------------------------------------------')
 
     # 保存模型，之后利用
@@ -203,6 +202,7 @@ def train_model(train_sample_list):
 def test_model(test_sample_list):
     # 加载模型
     model = torch.load('model.pt')
+    abnormal_number = 10  # 时间窗口内的异常数量阈值
 
     # 判断cuda能否使用
     if torch.cuda.is_available():
@@ -215,8 +215,8 @@ def test_model(test_sample_list):
     for sample in test_sample_list:
         # 获得trace数据，并进行异常检测
         test_trace_class_data = data_preprocessing(sample)
-        result = anomaly_detect(test_trace_class_data, 1)
-        if result is True:
+        window_traces = anomaly_detect(test_trace_class_data, abnormal_number)
+        if window_traces is not None:
             # 触发根因定位程序
             sample_encode_sequence, label_sequence = load_sample(sample)
             sample_encode_sequence = torch.Tensor(sample_encode_sequence).to(device)
@@ -242,10 +242,9 @@ def test_model(test_sample_list):
 
 
 if __name__ == '__main__':
-    # 1. 加载数据集，并区分训练集和测试集（如何分，随机分还是按照故障分）
     train_sample_list, test_sample_list = classify_dataset()
-    train_model(train_sample_list)
-    # test_model(test_sample_list)
+    # rain_model(train_sample_list)
+    test_model(test_sample_list)
 
 
 
