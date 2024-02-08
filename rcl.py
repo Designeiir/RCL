@@ -30,6 +30,7 @@ class TransformerEncoderClassification(nn.Module):
         self.transformer_encoder = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(d_model=dimension, nhead=head_num),  # 两个参数分别是输入样本的维度(50)和Encoder头的数量(头的数量必须能被维度整除)
             num_layers=layer_num,  # 层数，即最终的Encoder由6个EncoderLayer组成
+            enable_nested_tensor=True
         )  # 最终transformer_encoder的输入形式是(序列长度10，批大小15，维度50)，输出也还是(序列长度10，批大小15，维度50)，大小都不变
         self.fc = nn.Linear(sequence_length * dimension, out_feature)  # 全连接层，输入是 序列长度10*维度50，输出是2
 
@@ -143,7 +144,7 @@ def train_model(train_sample_list):
 
     # 判断cuda能否使用
     if torch.cuda.is_available():
-        device = torch.device("cuda:0")
+        device = torch.device("cpu")
         print("Running on the GPU")
     else:
         device = torch.device("cpu")
@@ -152,7 +153,7 @@ def train_model(train_sample_list):
     # 4. 构建训练模型
     head_num = 3  # 多头注意力数量
     layer_num = 6  # 层数
-    epoch_num = 10  # 迭代次数
+    epoch_num = 1  # 迭代次数
     dimension = batch_train_data.shape[-1]
     sequence_length = batch_train_data.shape[1]
     out_feature = len(Config.svc_list) * len(Config.region_list) * len(Config.chaos_list)
@@ -219,18 +220,19 @@ def test_model(test_sample_list):
         if window_traces is not None:
             # 触发根因定位程序
             sample_encode_sequence, label_sequence = load_sample(sample)
-            sample_encode_sequence = torch.Tensor(sample_encode_sequence).to(device)
+            sample_encode_sequence = torch.Tensor(sample_encode_sequence)
             label_sequence = torch.Tensor(label_sequence).to(device)
-            outputs = model(sample_encode_sequence)
+            outputs = model(sample_encode_sequence).to(device)
+            # TODO: softmax
             # 将每个trace的结果相加
             result = torch.sum(outputs, dim=0)
             result_sorted, result_sorted_index = torch.sort(result, dim=0, descending=True)
-            result_sorted_index = result_sorted_index.numpy().tolist()
+            result_sorted_index = result_sorted_index.cpu().numpy().tolist()
             rank_list = []  # 根因排名列表
             for result_index in result_sorted_index:
                 rank_list.append(get_label_name(result_index))
-            print('rank list:', rank_list)
             label_name = sample2label_name(sample)
+            print('label:',label_name, 'rank list:', rank_list)
             localization_list.append(rank_list.index(label_name))
     rank_1_pred = np.sum(list(map(lambda x: x < 1, localization_list))) / float(len(localization_list))
     rank_3_pred = np.sum(list(map(lambda x: x < 3, localization_list))) / float(len(localization_list))
@@ -243,11 +245,16 @@ def test_model(test_sample_list):
 
 if __name__ == '__main__':
     train_sample_list, test_sample_list = classify_dataset()
-    # rain_model(train_sample_list)
+    train_model(train_sample_list)
     test_model(test_sample_list)
 
 
-
+# loss 收敛范围， early stop
+# 分文件
+# 先跑五百轮。。。看看效果
+# 准确率（将云边加上再进行对比），召回率（动机）
+# 异常检测，延时归一化  stand scalar
+# 将数据mask再进入transformer
 
 
 

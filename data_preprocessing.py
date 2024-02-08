@@ -194,8 +194,6 @@ regions = {'cloud': ['10.244.13.', '10.244.0.', '10.244.5.', '10.244.6.'],
           'edge-1': ['10.244.8.', '10.244.12.'],
           'edge-2': ['10.244.9.', '10.244.11.']}
 
-namespaces = {'bookinfo', 'hipster'}
-# namespaces = {'bookinfo'}
 
 # 对span的调用关系进行处理，得到服务名，命名空间和网段名称
 def span_call_process(span_call: str):
@@ -253,7 +251,7 @@ def data_preprocessing(dir_path: str):
     # 加载某个文件夹中的所有trace
     trace_data = []
     trace_class_data = []
-    for namespace in namespaces:
+    for namespace in Config.namespaces:
         normal_trace_data = trace_load(dir_path + '/' + namespace + '/' + 'normal.pkl')
         abnormal_trace_data = trace_load(dir_path + '/' + namespace + '/' + 'abnormal.pkl')
         trace_data.extend(normal_trace_data)
@@ -322,7 +320,7 @@ def anomaly_detect(trace_class_data, abnormal_number):
         # 当异常trace数量达到一定时，判断为异常(统计时要注释掉)
         if count >= abnormal_number:
             # 获取一个更大的时间窗口
-            return get_time_window_traces(start_timestamp, forward_duration, backward_duration)
+            return get_time_window_traces(trace_class_data, start_timestamp, forward_duration, backward_duration)
         start_timestamp += detect_duration
 
     print("normal :", normal_count, "abnormal :", abnormal_count)
