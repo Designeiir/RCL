@@ -9,15 +9,17 @@ from torch.nn.functional import softmax
 import torch.optim as optim
 import numpy as np
 import time
+import wandb
 
 class MyDataSet(Dataset):  # 定义类，用于构建数据集
-    def __init__(self, data, label):
+    def __init__(self, data, label, mask):
         self.data = torch.Tensor(data)
         self.label = torch.Tensor(label)
+        self.mask = torch.tensor(mask, dtype=torch.bool)
         self.length = len(data)
 
     def __getitem__(self, index):
-        return self.data[index], self.label[index]
+        return self.data[index], self.label[index], self.mask[index]
 
     def __len__(self):
         return self.length
@@ -30,13 +32,13 @@ class TransformerEncoderClassification(nn.Module):
         self.transformer_encoder = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(d_model=dimension, nhead=head_num),  # 两个参数分别是输入样本的维度(50)和Encoder头的数量(头的数量必须能被维度整除)
             num_layers=layer_num,  # 层数，即最终的Encoder由6个EncoderLayer组成
-            enable_nested_tensor=True
+            enable_nested_tensor=True,
         )  # 最终transformer_encoder的输入形式是(序列长度10，批大小15，维度50)，输出也还是(序列长度10，批大小15，维度50)，大小都不变
         self.fc = nn.Linear(sequence_length * dimension, out_feature)  # 全连接层，输入是 序列长度10*维度50，输出是2
 
-    def forward(self, x):
+    def forward(self, x, mask_matrix):
         x = x.permute(1, 0, 2)  # 转换维度，原本x_train是(批大小15，序列长度10，维度50)，变为TransformerEncoder需要的(序列长度10，批大小15，维度50)
-        x = self.transformer_encoder(x)  # 经过transformer_encoder，x_train的形状还是(序列长度10，批大小15，维度50)
+        x = self.transformer_encoder(x, src_key_padding_mask=mask_matrix)  # 经过transformer_encoder，x_train的形状还是(序列长度10，批大小15，维度50)
         x = x.permute(1, 0, 2)  # 恢复原始维度顺序，准备输入全连接
         x = x.flatten(1)  # 拉平，x维度是(批大小15，序列长度10，维度50)，指定维度1，拉平为(15,500)
         x = self.fc(x)  # 经过全连接
@@ -69,6 +71,7 @@ def classify_dataset():
 # 加载样本，并对数据集进行编码
 def load_sample(sample):
     sample_encode_sequence = []
+    mask_sequence = []
     trace_class_data = data_preprocessing(sample)
     # 排除固定延时影响
     trace_class_data = remove_region_latency(trace_class_data)
@@ -79,21 +82,34 @@ def load_sample(sample):
         for i in range(8 - length):
             encode_list.append([0, 0, 0, 0, 0, 0, 0, 0, 0])
         sample_encode_sequence.append(encode_list)
+        mask_sequence.append(get_mask(length, 8))
     # 加载标签
     label_index = get_label_index(sample)
     label_sequence = [label_index] * len(sample_encode_sequence)
 
-    return sample_encode_sequence, label_sequence
+    return sample_encode_sequence, label_sequence, mask_sequence
 
+
+def get_mask(encode_length, max_length):
+    mask = []
+    for i in range(max_length):
+        if i < encode_length:
+            mask.append(False)
+        else:
+            mask.append(True)
+
+    return mask
 
 def load_dataset(sample_list):
     dataset_list = []
     label_list = []
+    mask_list = []
     for sample in sample_list:
-        sample_encode_sequence, label_sequence = load_sample(sample)
+        sample_encode_sequence, label_sequence, mask_sequence = load_sample(sample)
         dataset_list.extend(sample_encode_sequence)
         label_list.extend(label_sequence)
-    dataset = MyDataSet(dataset_list, label_list)
+        mask_list.extend(mask_sequence)
+    dataset = MyDataSet(dataset_list, label_list, mask_list)
     return dataset
 
 
@@ -134,17 +150,35 @@ def get_label_name(label_index: int):
 
 # 训练模型
 def train_model(train_sample_list):
+    # login
+    wandb.login(key='968d99f8b316c7232ecd8fef76d74aac3ef5c54c')
+    # start a new wandb run to track this script
+    wandb.init(
+        # set the wandb project where this run will be logged
+        project="rcl-transformer-encoder",
+
+        # track hyperparameters and run metadata
+        config={
+            "learning_rate": 0.02,
+            "architecture": "transformer-encoder",
+            "dataset": "bookinfo",
+            "epochs": 10,
+            "multi-head": 3,
+            "layer": 6
+        }
+    )
+
     # 2. 对trace数据进行编码
     train_dataset = load_dataset(train_sample_list)
     train_dataloader = DataLoader(train_dataset, batch_size=256, shuffle=True, num_workers=6)
     # 查看一批数据的格式
-    batch_train_data, batch_train_label = next(iter(train_dataloader))
+    batch_train_data, batch_train_label, batch_mask = next(iter(train_dataloader))
     print("batch shape: ")
-    print(batch_train_data.shape, batch_train_data.shape)  # (批大小，序列长度，维度)
+    print(batch_train_data.shape, batch_train_data.shape, batch_mask)  # (批大小，序列长度，维度)
 
     # 判断cuda能否使用
     if torch.cuda.is_available():
-        device = torch.device("cpu")
+        device = torch.device("cuda:0")
         print("Running on the GPU")
     else:
         device = torch.device("cpu")
@@ -153,7 +187,7 @@ def train_model(train_sample_list):
     # 4. 构建训练模型
     head_num = 3  # 多头注意力数量
     layer_num = 6  # 层数
-    epoch_num = 1  # 迭代次数
+    epoch_num = 10  # 迭代次数
     dimension = batch_train_data.shape[-1]
     sequence_length = batch_train_data.shape[1]
     out_feature = len(Config.svc_list) * len(Config.region_list) * len(Config.chaos_list)
@@ -168,13 +202,20 @@ def train_model(train_sample_list):
     print(start_time, 'start training')
     print('---------------------------------------------------------------------------------')
 
-    # 训练模型
-    train_loss = 0
+    # 开始迭代
     for epoch in range(epoch_num):
-        for i, (batch_train_data, batch_train_label) in enumerate(train_dataloader):
+        train_correct = 0
+        train_accuracy = 0
+        train_loss = 0
+        batches_average_loss = 0
+        train_total = 0
+
+        # 对每一个batch进行训练
+        for i, (batch_train_data, batch_train_label, batch_mask) in enumerate(train_dataloader):
             batch_train_data = batch_train_data.to(device)
             batch_train_label = batch_train_label.to(device)
-            outputs = model(batch_train_data)
+            batch_mask = batch_mask.to(device)
+            outputs = model(batch_train_data, batch_mask)
             # 计算误差
             loss = criterion(outputs, batch_train_label.long())
             # 计算准确率
@@ -185,11 +226,22 @@ def train_model(train_sample_list):
             loss.backward()
             optimizer.step()
             # 计算训练集acc、loss并输出
-            train_acc = (label_pred == batch_train_label).sum() / len(batch_train_label)
+            correct = (label_pred == batch_train_label).sum().item()
+            train_correct += correct
+            accuracy = correct / len(batch_train_label)
             train_loss += loss.item()
-            if (i + 1) % 10 == 0:  # 每10次迭代输出一次
-                print('[%d %5d] loss: %.3f acc: %.3f' % (epoch + 1, i + 1, train_loss / 10, train_acc))
-                train_loss = 0.0
+            batches_average_loss += loss.item()
+            train_total += batch_train_label.size(0)
+
+            if (i + 1) % 10 == 0:  # 每10个batch输出一次
+                print('[%d %5d] loss: %.3f acc: %.3f' % (epoch + 1, i + 1, batches_average_loss / 10, accuracy))
+                batches_average_loss = 0
+
+        train_loss = train_loss / len(train_dataloader)
+        train_accuracy = train_correct / train_total
+        print('[epoch %d] loss: %.3f acc: %.3f' % (epoch + 1, train_loss, train_accuracy))
+        # log metrics to wandb
+        wandb.log({"acc": train_accuracy, "loss": train_loss})
 
     end_time = time.time()
     print(end_time, 'end training')
@@ -198,7 +250,7 @@ def train_model(train_sample_list):
 
     # 保存模型，之后利用
     torch.save(model, 'model.pt')
-
+    wandb.finish()
 
 def test_model(test_sample_list):
     # 加载模型
@@ -219,11 +271,11 @@ def test_model(test_sample_list):
         window_traces = anomaly_detect(test_trace_class_data, abnormal_number)
         if window_traces is not None:
             # 触发根因定位程序
-            sample_encode_sequence, label_sequence = load_sample(sample)
-            sample_encode_sequence = torch.Tensor(sample_encode_sequence)
-            label_sequence = torch.Tensor(label_sequence).to(device)
-            outputs = model(sample_encode_sequence).to(device)
-            # TODO: softmax
+            sample_encode_sequence, label_sequence, mask_sequence = load_sample(sample)
+            sample_encode_sequence = torch.Tensor(sample_encode_sequence).to(device)
+            mask_sequence = torch.tensor(mask_sequence, dtype=torch.bool).to(device)
+            outputs = model(sample_encode_sequence, mask_sequence)
+            outputs = softmax(outputs, dim=1)  # softmax
             # 将每个trace的结果相加
             result = torch.sum(outputs, dim=0)
             result_sorted, result_sorted_index = torch.sort(result, dim=0, descending=True)
@@ -245,7 +297,7 @@ def test_model(test_sample_list):
 
 if __name__ == '__main__':
     train_sample_list, test_sample_list = classify_dataset()
-    train_model(train_sample_list)
+    # train_model(train_sample_list)
     test_model(test_sample_list)
 
 
