@@ -25,6 +25,32 @@ class MyDataSet(Dataset):  # 定义类，用于构建数据集
         return self.length
 
 
+class PositionalEncoding(nn.Module):
+    def __init__(self, device, d_model=9, dropout=0.1, max_len=8):
+        # d_model是每个词embedding后的维度
+        super(PositionalEncoding, self).__init__()
+        pe = torch.zeros(max_len, d_model).to(device)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term2 = torch.pow(torch.tensor(10000.0), torch.arange(0, d_model, 2).float() / d_model)
+        div_term1 = torch.pow(torch.tensor(10000.0), torch.arange(1, d_model, 2).float() / d_model)
+        # 高级切片方式，即从0开始，两个步长取一个。即奇数和偶数位置赋值不一样。直观来看就是每一句话的
+        pe[:, 0::2] = torch.sin(position * div_term2)
+        pe[:, 1::2] = torch.cos(position * div_term1)
+        # 这里是为了与x的维度保持一致，释放了一个维度
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        temp_pe = self.pe.repeat(x.size(0), 1, 1)
+        x = x + temp_pe
+        return x
+
+    def add_one(self, x):
+        temp_pe = self.pe.squeeze(0)
+        x = x + temp_pe
+        return x
+
+
 class TransformerEncoderClassification(nn.Module):
     def __init__(self, dimension, head_num, layer_num, sequence_length, out_feature):
         super(TransformerEncoderClassification, self).__init__()
@@ -159,18 +185,19 @@ def train_model(train_sample_list):
 
         # track hyperparameters and run metadata
         config={
-            "learning_rate": 0.02,
             "architecture": "transformer-encoder",
             "dataset": "bookinfo",
-            "epochs": 10,
+            "epochs": 1000,
             "multi-head": 3,
-            "layer": 6
+            "layer": 6,
+            "batch-size": 64,
+            "optimizer": "SGD"
         }
     )
 
     # 2. 对trace数据进行编码
     train_dataset = load_dataset(train_sample_list)
-    train_dataloader = DataLoader(train_dataset, batch_size=256, shuffle=True, num_workers=6)
+    train_dataloader = DataLoader(train_dataset, batch_size=Config.batch_size, shuffle=True, num_workers=6)
     # 查看一批数据的格式
     batch_train_data, batch_train_label, batch_mask = next(iter(train_dataloader))
     print("batch shape: ")
@@ -185,9 +212,9 @@ def train_model(train_sample_list):
         print("Running on the CPU")
 
     # 4. 构建训练模型
-    head_num = 3  # 多头注意力数量
-    layer_num = 6  # 层数
-    epoch_num = 10  # 迭代次数
+    head_num = Config.head_num
+    layer_num = Config.epoch_num
+    epoch_num = Config.epoch_num
     dimension = batch_train_data.shape[-1]
     sequence_length = batch_train_data.shape[1]
     out_feature = len(Config.svc_list) * len(Config.region_list) * len(Config.chaos_list)
@@ -195,9 +222,12 @@ def train_model(train_sample_list):
     model = TransformerEncoderClassification(dimension, head_num, layer_num, sequence_length, out_feature).to(device)
     criterion = nn.CrossEntropyLoss().to(device)
     optimizer = optim.SGD(model.parameters(), lr=0.001)  # 优化器
+    # optimizer = torch.optim.Adam(model.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=0, amsgrad=False)
+    position_encoding = PositionalEncoding(device)
 
 
     start_time = time.time()
+    print(f'batch size = {Config.batch_size}, optimizer = {optimizer.__class__}, dataset = bookinfo, epoch num = {epoch_num}')
     print(f'head number = {head_num}, layer number = {layer_num}, out feature number = {out_feature}')
     print(start_time, 'start training')
     print('---------------------------------------------------------------------------------')
@@ -214,7 +244,8 @@ def train_model(train_sample_list):
         for i, (batch_train_data, batch_train_label, batch_mask) in enumerate(train_dataloader):
             batch_train_data = batch_train_data.to(device)
             batch_train_label = batch_train_label.to(device)
-            batch_mask = batch_mask.to(device)
+            batch_mask = batch_mask.to(device)  # padding mask
+            batch_train_data = position_encoding(batch_train_data)
             outputs = model(batch_train_data, batch_mask)
             # 计算误差
             loss = criterion(outputs, batch_train_label.long())
@@ -255,13 +286,15 @@ def train_model(train_sample_list):
 def test_model(test_sample_list):
     # 加载模型
     model = torch.load('model.pt')
-    abnormal_number = 10  # 时间窗口内的异常数量阈值
+    abnormal_number = 8  # 时间窗口内的异常数量阈值
 
     # 判断cuda能否使用
     if torch.cuda.is_available():
         device = torch.device("cuda:0")
     else:
         device = torch.device("cpu")
+
+    position_encoding = PositionalEncoding(device)
 
     # 6. 测试
     localization_list = []  # 每个样本根因定位的排名
@@ -273,7 +306,8 @@ def test_model(test_sample_list):
             # 触发根因定位程序
             sample_encode_sequence, label_sequence, mask_sequence = load_sample(sample)
             sample_encode_sequence = torch.Tensor(sample_encode_sequence).to(device)
-            mask_sequence = torch.tensor(mask_sequence, dtype=torch.bool).to(device)
+            mask_sequence = torch.tensor(mask_sequence, dtype=torch.bool).to(device)  # mask
+            sample_encode_sequence = position_encoding.add_one(sample_encode_sequence)  # 加入位置编码
             outputs = model(sample_encode_sequence, mask_sequence)
             outputs = softmax(outputs, dim=1)  # softmax
             # 将每个trace的结果相加
@@ -297,7 +331,7 @@ def test_model(test_sample_list):
 
 if __name__ == '__main__':
     train_sample_list, test_sample_list = classify_dataset()
-    # train_model(train_sample_list)
+    train_model(train_sample_list)
     test_model(test_sample_list)
 
 

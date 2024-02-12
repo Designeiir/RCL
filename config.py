@@ -19,6 +19,11 @@ class Config(object):
 
     dataset_dir = 'dataset'
 
+    head_num = 3  # 多头注意力数量
+    layer_num = 6  # 层数
+    epoch_num = 1000  # 迭代次数
+    batch_size = 256
+
     @classmethod
     def load_latency_dict(cls):
         normal_path = 'normal_latency.pkl'

@@ -15,7 +15,7 @@ def dict_load(path):
                 break
     return data
 
-data = dict_load('region_latency.pkl')
+data = dict_load('normal_latency.pkl')
 for key in data.keys():
     print(key, ': ',  data[key])
 
