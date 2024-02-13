@@ -187,11 +187,11 @@ def train_model(train_sample_list):
         config={
             "architecture": "transformer-encoder",
             "dataset": "bookinfo",
-            "epochs": 1000,
+            "epochs": 50,
             "multi-head": 3,
             "layer": 6,
-            "batch-size": 64,
-            "optimizer": "SGD"
+            "batch-size": 256,
+            "optimizer": "Adam"
         }
     )
 
@@ -213,7 +213,7 @@ def train_model(train_sample_list):
 
     # 4. 构建训练模型
     head_num = Config.head_num
-    layer_num = Config.epoch_num
+    layer_num = Config.layer_num
     epoch_num = Config.epoch_num
     dimension = batch_train_data.shape[-1]
     sequence_length = batch_train_data.shape[1]
@@ -221,8 +221,8 @@ def train_model(train_sample_list):
 
     model = TransformerEncoderClassification(dimension, head_num, layer_num, sequence_length, out_feature).to(device)
     criterion = nn.CrossEntropyLoss().to(device)
-    optimizer = optim.SGD(model.parameters(), lr=0.001)  # 优化器
-    # optimizer = torch.optim.Adam(model.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=0, amsgrad=False)
+    # optimizer = optim.SGD(model.parameters(), lr=0.001)  # 优化器
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=0, amsgrad=False)
     position_encoding = PositionalEncoding(device)
 
 
@@ -275,6 +275,12 @@ def train_model(train_sample_list):
         wandb.log({"acc": train_accuracy, "loss": train_loss})
 
     end_time = time.time()
+    print(f'batch size = {Config.batch_size}, optimizer = {optimizer.__class__}, dataset = bookinfo, epoch num = {epoch_num}')
+    print(f'head number = {head_num}, layer number = {layer_num}, out feature number = {out_feature}')
+    # 将其写入记录文件中
+    with open('result.txt', 'rt') as f:
+        f.write(f'batch size = {Config.batch_size}, optimizer = {optimizer.__class__}, dataset = bookinfo, epoch num = {epoch_num}\n')
+        f.write(f'head number = {head_num}, layer number = {layer_num}, out feature number = {out_feature}\n')
     print(end_time, 'end training')
     print("training time: %.3fs" % (end_time - start_time))
     print('---------------------------------------------------------------------------------')
@@ -326,6 +332,12 @@ def test_model(test_sample_list):
     print("rank 1 prediction: ", rank_1_pred)
     print("rank 3 prediction: ", rank_3_pred)
     print("rank 5 prediction: ", rank_5_pred)
+
+    with open('result.txt', 'rt') as f:
+        f.write("rank 1 prediction: " + rank_1_pred + '\n')
+        f.write("rank 3 prediction: " + rank_3_pred + '\n')
+        f.write("rank 5 prediction: " + rank_5_pred + '\n')
+        f.write("----------------------------------")
 
 
 

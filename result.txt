@@ -1,0 +1,36 @@
+batch size = 256, optimizer = <class 'torch.optim.adam.Adam'>, dataset = bookinfo, epoch num = 1000
+head number = 3, layer number = 6, out feature number = 63
+rank 1 prediction:  0.8222222222222222
+rank 3 prediction:  0.9555555555555556
+rank 5 prediction:  0.9555555555555556
+---------------------------
+batch size = 256, optimizer = <class 'torch.optim.sgd.SGD'>, dataset = bookinfo, epoch num = 1000
+head number = 3, layer number = 6, out feature number = 63
+rank 1 prediction:  0.6739130434782609
+rank 3 prediction:  0.8913043478260869
+rank 5 prediction:  0.9782608695652174
+---------------------------
+batch size = 256, optimizer = <class 'torch.optim.adam.Adam'>, dataset = bookinfo, epoch num = 100
+head number = 3, layer number = 6, out feature number = 63
+rank 1 prediction:  0.717391304347826
+rank 3 prediction:  0.9782608695652174
+rank 5 prediction:  1.0
+---------------------------
+batch size = 256, optimizer = <class 'torch.optim.adam.Adam'>, dataset = bookinfo, epoch num = 500
+head number = 3, layer number = 6, out feature number = 63
+rank 1 prediction:  0.7608695652173914
+rank 3 prediction:  0.9347826086956522
+rank 5 prediction:  1.0
+---------------------------
+batch size = 256, optimizer = <class 'torch.optim.adam.Adam'>, dataset = bookinfo, epoch num = 2000
+head number = 3, layer number = 6, out feature number = 63
+rank 1 prediction:  0.7111111111111111
+rank 3 prediction:  0.9555555555555556
+rank 5 prediction:  0.9777777777777777
+--------------------------
+batch size = 256, optimizer = <class 'torch.optim.adam.Adam'>, dataset = bookinfo, epoch num = 50
+head number = 3, layer number = 6, out feature number = 63
+rank 1 prediction:  0.7111111111111111
+rank 3 prediction:  0.9111111111111111
+rank 5 prediction:  0.9777777777777777
+--------------------------
