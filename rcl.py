@@ -1,7 +1,6 @@
 from config import Config
-import os
-import random
-from data_preprocessing import data_preprocessing, anomaly_detect, remove_region_latency
+from data_preprocessing import data_preprocessing, anomaly_detect, remove_region_latency, classify_dataset
+from data_structure import MyDataSet
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
@@ -10,21 +9,10 @@ import torch.optim as optim
 import numpy as np
 import time
 import wandb
-
-class MyDataSet(Dataset):  # 定义类，用于构建数据集
-    def __init__(self, data, label, mask):
-        self.data = torch.Tensor(data)
-        self.label = torch.Tensor(label)
-        self.mask = torch.tensor(mask, dtype=torch.bool)
-        self.length = len(data)
-
-    def __getitem__(self, index):
-        return self.data[index], self.label[index], self.mask[index]
-
-    def __len__(self):
-        return self.length
+import uuid
 
 
+# 将数据加入位置编码
 class PositionalEncoding(nn.Module):
     def __init__(self, device, d_model=9, dropout=0.1, max_len=8):
         # d_model是每个词embedding后的维度
@@ -33,10 +21,10 @@ class PositionalEncoding(nn.Module):
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
         div_term2 = torch.pow(torch.tensor(10000.0), torch.arange(0, d_model, 2).float() / d_model)
         div_term1 = torch.pow(torch.tensor(10000.0), torch.arange(1, d_model, 2).float() / d_model)
-        # 高级切片方式，即从0开始，两个步长取一个。即奇数和偶数位置赋值不一样。直观来看就是每一句话的
+        # 高级切片方式，即从0开始，两个步长取一个。即奇数和偶数位置赋值不一样。
         pe[:, 0::2] = torch.sin(position * div_term2)
         pe[:, 1::2] = torch.cos(position * div_term1)
-        # 这里是为了与x的维度保持一致，释放了一个维度
+        # 与x的维度保持一致，释放了一个维度
         pe = pe.unsqueeze(0)
         self.register_buffer('pe', pe)
 
@@ -51,50 +39,27 @@ class PositionalEncoding(nn.Module):
         return x
 
 
+# Transformer_encoder模型
 class TransformerEncoderClassification(nn.Module):
     def __init__(self, dimension, head_num, layer_num, sequence_length, out_feature):
         super(TransformerEncoderClassification, self).__init__()
-        # 先用nn.TransformerEncoderLayer构造Encoder层，再用nn.TransformerEncoder构造最终的Encoder，最终的Encoder可以包括几个层
         self.transformer_encoder = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(d_model=dimension, nhead=head_num),  # 两个参数分别是输入样本的维度(50)和Encoder头的数量(头的数量必须能被维度整除)
-            num_layers=layer_num,  # 层数，即最终的Encoder由6个EncoderLayer组成
+            nn.TransformerEncoderLayer(d_model=dimension, nhead=head_num),  # 样本维度，头的数量
+            num_layers=layer_num,  # encoder层数
             enable_nested_tensor=True,
-        )  # 最终transformer_encoder的输入形式是(序列长度10，批大小15，维度50)，输出也还是(序列长度10，批大小15，维度50)，大小都不变
-        self.fc = nn.Linear(sequence_length * dimension, out_feature)  # 全连接层，输入是 序列长度10*维度50，输出是2
+        )  # 最终transformer_encoder的输入形式是(序列长度，批大小，维度)(序列长度，批大小，维度)
+        self.fc = nn.Linear(sequence_length * dimension, out_feature)  # 全连接层
 
     def forward(self, x, mask_matrix):
-        x = x.permute(1, 0, 2)  # 转换维度，原本x_train是(批大小15，序列长度10，维度50)，变为TransformerEncoder需要的(序列长度10，批大小15，维度50)
-        x = self.transformer_encoder(x, src_key_padding_mask=mask_matrix)  # 经过transformer_encoder，x_train的形状还是(序列长度10，批大小15，维度50)
+        x = x.permute(1, 0, 2)  # 转换维度变为TransformerEncoder需要的(序列长度10，批大小15，维度50)
+        x = self.transformer_encoder(x, src_key_padding_mask=mask_matrix)
         x = x.permute(1, 0, 2)  # 恢复原始维度顺序，准备输入全连接
-        x = x.flatten(1)  # 拉平，x维度是(批大小15，序列长度10，维度50)，指定维度1，拉平为(15,500)
+        x = x.flatten(1)  # 拉平，x维度是(批大小，序列长度，维度)，指定维度1，拉平为(批大小,序列长度，维度)
         x = self.fc(x)  # 经过全连接
-        # x = softmax(x, dim=1)  # softmax
         return x
 
 
-def classify_dataset():
-    # 区分数据集和训练集
-    train_sample_list = []
-    test_sample_list = []
-    namespace_list = os.listdir(Config.dataset_dir)
-    for namespace in namespace_list:
-        chaos_list = os.listdir(os.path.join(Config.dataset_dir, namespace))
-        for chaos in chaos_list:
-            file_name_list = os.listdir(os.path.join(Config.dataset_dir, namespace, chaos))
-            sample_list = []
-            for file_name in file_name_list:
-                sample_list.append(os.path.join(Config.dataset_dir, namespace, chaos, file_name))
-            test_num = round(0.2 * len(sample_list))
-            test_list = random.sample(sample_list, test_num)
-            for test_name in test_list:
-                sample_list.remove(test_name)
-            train_sample_list.extend(sample_list)
-            test_sample_list.extend(test_list)
-
-    return train_sample_list, test_sample_list
-
-
-# 加载样本，并对数据集进行编码
+# 加载一个样本，并对样本数据集进行编码
 def load_sample(sample):
     sample_encode_sequence = []
     mask_sequence = []
@@ -105,10 +70,11 @@ def load_sample(sample):
     for trace in trace_class_data:
         encode_list = trace.trace_encode()
         length = len(encode_list)
-        for i in range(8 - length):
+        # padding为同样序列长度
+        for i in range(Config.max_sequence_length - length):
             encode_list.append([0, 0, 0, 0, 0, 0, 0, 0, 0])
         sample_encode_sequence.append(encode_list)
-        mask_sequence.append(get_mask(length, 8))
+        mask_sequence.append(get_mask(length))
     # 加载标签
     label_index = get_label_index(sample)
     label_sequence = [label_index] * len(sample_encode_sequence)
@@ -116,9 +82,10 @@ def load_sample(sample):
     return sample_encode_sequence, label_sequence, mask_sequence
 
 
-def get_mask(encode_length, max_length):
+# 计算数据对应的mask
+def get_mask(encode_length):
     mask = []
-    for i in range(max_length):
+    for i in range(Config.max_sequence_length):
         if i < encode_length:
             mask.append(False)
         else:
@@ -126,6 +93,8 @@ def get_mask(encode_length, max_length):
 
     return mask
 
+
+# 加载数据集中的样本
 def load_dataset(sample_list):
     dataset_list = []
     label_list = []
@@ -166,6 +135,7 @@ def sample2label_name(sample: str):
     return svc + '.' + namespace + '_' + region + '_' + chaos
 
 
+# 根据样本索引获得label名
 def get_label_name(label_index: int):
     svc_index = int(label_index / (len(Config.region_list) * len(Config.chaos_list)))
     remainder = (label_index % (len(Config.region_list) * len(Config.chaos_list)))
@@ -175,7 +145,7 @@ def get_label_name(label_index: int):
 
 
 # 训练模型
-def train_model(train_sample_list):
+def train_model(train_sample_list, uuid):
     # login
     wandb.login(key='968d99f8b316c7232ecd8fef76d74aac3ef5c54c')
     # start a new wandb run to track this script
@@ -186,11 +156,11 @@ def train_model(train_sample_list):
         # track hyperparameters and run metadata
         config={
             "architecture": "transformer-encoder",
-            "dataset": "bookinfo",
-            "epochs": 50,
-            "multi-head": 3,
-            "layer": 6,
-            "batch-size": 256,
+            "dataset": str(Config.namespaces),
+            "epochs": Config.epoch_num,
+            "multi-head": Config.head_num,
+            "layer": Config.layer_num,
+            "batch-size": Config.batch_size,
             "optimizer": "Adam"
         }
     )
@@ -205,7 +175,8 @@ def train_model(train_sample_list):
 
     # 判断cuda能否使用
     if torch.cuda.is_available():
-        device = torch.device("cuda:0")
+        # device = torch.device("cuda:0")
+        device = torch.device("cpu")
         print("Running on the GPU")
     else:
         device = torch.device("cpu")
@@ -264,22 +235,19 @@ def train_model(train_sample_list):
             batches_average_loss += loss.item()
             train_total += batch_train_label.size(0)
 
-            if (i + 1) % 10 == 0:  # 每10个batch输出一次
-                print('[%d %5d] loss: %.3f acc: %.3f' % (epoch + 1, i + 1, batches_average_loss / 10, accuracy))
-                batches_average_loss = 0
-
         train_loss = train_loss / len(train_dataloader)
         train_accuracy = train_correct / train_total
-        print('[epoch %d] loss: %.3f acc: %.3f' % (epoch + 1, train_loss, train_accuracy))
+        print('[epoch %d] loss: %.5f acc: %.5f' % (epoch + 1, train_loss, train_accuracy))
         # log metrics to wandb
         wandb.log({"acc": train_accuracy, "loss": train_loss})
 
     end_time = time.time()
-    print(f'batch size = {Config.batch_size}, optimizer = {optimizer.__class__}, dataset = bookinfo, epoch num = {epoch_num}')
+    print(f'batch size = {Config.batch_size}, optimizer = {optimizer.__class__}, dataset = {str(Config.namespaces)}, epoch num = {epoch_num}')
     print(f'head number = {head_num}, layer number = {layer_num}, out feature number = {out_feature}')
     # 将其写入记录文件中
     with open('result.txt', 'rt') as f:
-        f.write(f'batch size = {Config.batch_size}, optimizer = {optimizer.__class__}, dataset = bookinfo, epoch num = {epoch_num}\n')
+        f.write(f'{uuid}\n')
+        f.write(f'batch size = {Config.batch_size}, optimizer = {optimizer.__class__}, dataset = {str(Config.namespaces)}, epoch num = {epoch_num}\n')
         f.write(f'head number = {head_num}, layer number = {layer_num}, out feature number = {out_feature}\n')
     print(end_time, 'end training')
     print("training time: %.3fs" % (end_time - start_time))
@@ -289,7 +257,9 @@ def train_model(train_sample_list):
     torch.save(model, 'model.pt')
     wandb.finish()
 
-def test_model(test_sample_list):
+
+# 测试模型
+def test_model(test_sample_list, uuid):
     # 加载模型
     model = torch.load('model.pt')
     abnormal_number = 8  # 时间窗口内的异常数量阈值
@@ -334,6 +304,7 @@ def test_model(test_sample_list):
     print("rank 5 prediction: ", rank_5_pred)
 
     with open('result.txt', 'rt') as f:
+        f.write(f'{uuid}\n')
         f.write("rank 1 prediction: " + rank_1_pred + '\n')
         f.write("rank 3 prediction: " + rank_3_pred + '\n')
         f.write("rank 5 prediction: " + rank_5_pred + '\n')
@@ -342,17 +313,13 @@ def test_model(test_sample_list):
 
 
 if __name__ == '__main__':
+    uuid = uuid.uuid1()
     train_sample_list, test_sample_list = classify_dataset()
-    train_model(train_sample_list)
-    test_model(test_sample_list)
+    train_model(train_sample_list, uuid)
+    test_model(test_sample_list, uuid)
 
 
-# loss 收敛范围， early stop
-# 分文件
-# 先跑五百轮。。。看看效果
-# 准确率（将云边加上再进行对比），召回率（动机）
-# 异常检测，延时归一化  stand scalar
-# 将数据mask再进入transformer
+
 
 
 

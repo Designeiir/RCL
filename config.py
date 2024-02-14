@@ -21,8 +21,10 @@ class Config(object):
 
     head_num = 3  # 多头注意力数量
     layer_num = 6  # 层数
-    epoch_num = 1000  # 迭代次数
-    batch_size = 256
+    epoch_num = 10  # 迭代次数
+    batch_size = 256  # 批数据数量
+    anomaly_n = 3
+    max_sequence_length = 8
 
     @classmethod
     def load_latency_dict(cls):
