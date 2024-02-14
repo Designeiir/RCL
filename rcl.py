@@ -119,7 +119,7 @@ def get_label_index(sample: str):
 
     label_index = Config.svc_list.index(svc + '.' + namespace) * len(Config.region_list) * len(Config.chaos_list) \
                   + Config.region_list.index(region) * len(Config.chaos_list) \
-                  + Config.chaos_list.index(chaos)
+                  + Config.chaos_list.index(chaos) * Config.add_label_chaos
     return label_index
 
 
@@ -132,17 +132,24 @@ def sample2label_name(sample: str):
     region = sample_name.split('_')[1]
     chaos = sample_name.split('_')[2]
 
-    return svc + '.' + namespace + '_' + region + '_' + chaos
+    if Config.add_label_chaos == 1:
+        return svc + '.' + namespace + '_' + region + '_' + chaos
+    else:
+        return svc + '.' + namespace + '_' + region
 
 
 # 根据样本索引获得label名
 def get_label_name(label_index: int):
-    svc_index = int(label_index / (len(Config.region_list) * len(Config.chaos_list)))
-    remainder = (label_index % (len(Config.region_list) * len(Config.chaos_list)))
-    region_index = int(remainder / len(Config.chaos_list))
-    chaos_index = remainder % len(Config.chaos_list)
-    return Config.svc_list[svc_index] + '_' + Config.region_list[region_index] + '_' + Config.chaos_list[chaos_index]
-
+    if Config.add_label_chaos == 1:
+        svc_index = int(label_index / (len(Config.region_list) * len(Config.chaos_list)))
+        remainder = (label_index % (len(Config.region_list) * len(Config.chaos_list)))
+        region_index = int(remainder / len(Config.chaos_list))
+        chaos_index = remainder % len(Config.chaos_list)
+        return Config.svc_list[svc_index] + '_' + Config.region_list[region_index] + '_' + Config.chaos_list[chaos_index]
+    else:
+        svc_index = int(label_index / len(Config.region_list))
+        region_index = label_index % len(Config.region_list)
+        return Config.svc_list[svc_index] + '_' + Config.region_list[region_index]
 
 # 训练模型
 def train_model(train_sample_list, uuid):
@@ -188,11 +195,13 @@ def train_model(train_sample_list, uuid):
     epoch_num = Config.epoch_num
     dimension = batch_train_data.shape[-1]
     sequence_length = batch_train_data.shape[1]
-    out_feature = len(Config.svc_list) * len(Config.region_list) * len(Config.chaos_list)
+    if Config.add_label_chaos == 1:
+        out_feature = len(Config.svc_list) * len(Config.region_list) * len(Config.chaos_list)
+    else:
+        out_feature = len(Config.svc_list) * len(Config.region_list)
 
     model = TransformerEncoderClassification(dimension, head_num, layer_num, sequence_length, out_feature).to(device)
     criterion = nn.CrossEntropyLoss().to(device)
-    # optimizer = optim.SGD(model.parameters(), lr=0.001)  # 优化器
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=0, amsgrad=False)
     position_encoding = PositionalEncoding(device)
 

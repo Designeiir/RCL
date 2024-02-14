@@ -25,6 +25,7 @@ class Config(object):
     batch_size = 256  # 批数据数量
     anomaly_n = 3
     max_sequence_length = 8
+    add_label_chaos = 1  # 标签是否添加故障类型，有为1，没有为0
 
     @classmethod
     def load_latency_dict(cls):
