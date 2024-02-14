@@ -29,3 +29,21 @@ def dict_load(path):
                 break
     return data
 
+
+# 将字典存进pkl文件中
+def pickle_save(data, save_path):
+    with open(save_path, 'wb') as fw:
+        pickle.dump(data, fw)
+
+
+if __name__ == '__main__':
+    load_path = 'dataset/bookinfo/details-v1_cloud_mem/cloud_pod_details-v1_details-v1-5c6887cb89-pw9p2_mem_3/hipster2/normal.pkl'
+    # dicts = dict_load(load_path)
+    #     for key in dicts.keys():
+    #         print(key,  ':  ', dicts[key])
+
+    traces = trace_load(load_path)
+    for trace in traces:
+        print(trace)
+
+

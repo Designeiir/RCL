@@ -2,35 +2,8 @@ import os
 import pickle
 import numpy as np
 from config import Config
-from data_preprocessing import Trace, Span
-
-# 加载正常情况下的pod延时和net延时，并将其排序合并
-# 加载字典数据
-def dict_load(path):
-    data = {}
-    with open(path, 'rb') as f:
-        while True:
-            try:
-                tmp_dict = pickle.load(f)
-                for key in tmp_dict.keys():
-                    if key not in data.keys():
-                        data[key] = []
-                    value = tmp_dict[key]
-                    data[key] = data[key] + value
-            except EOFError:
-                break
-    return data
-
-
-def trace_load(file_path: str):
-    data = []
-    with open(file_path, 'rb') as f:
-        while True:
-            try:
-                data.extend(pickle.load(f))
-            except EOFError:
-                break
-    return data
+from data_preprocessing import Trace, Span_Pair
+from pickle_utils import dict_load, trace_load, pickle_save
 
 
 # 对原来的调用名进行处理，将其变为SVC.REGION的格式
@@ -200,11 +173,6 @@ def get_region_latency(request_cross_region_dict, response_cross_region_dict, no
         region_latency_statistic_dict[key] = [request_mean, request_std, response_mean, response_std]
     return region_latency_statistic_dict
 
-# 将字典存进pkl文件中
-def dict_save(data, save_path):
-    with open(save_path, 'wb') as fw:
-        pickle.dump(data, fw)
-
 
 if __name__ == '__main__':
     # 加载数据
@@ -221,6 +189,6 @@ if __name__ == '__main__':
     # 求出各个网段的通信的平均值和标准差，存在某个位置
     region_latency_statistic_dict = get_region_latency(request_cross_region_dict, response_cross_region_dict, normal_latency_dict)
     # 将信息存进文件中
-    dict_save(normal_latency_dict, 'normal_latency.pkl')
-    dict_save(region_latency_statistic_dict, 'region_latency.pkl')
+    pickle_save(normal_latency_dict, 'normal_latency.pkl')
+    pickle_save(region_latency_statistic_dict, 'region_latency.pkl')
 
